@@ -6,10 +6,11 @@ from model.trainer import ModelTrainer
 import keyboard
 import time
 
-def print_timing(timing_dict):
-    """Print timing information on one line"""
+def print_timing(timing_dict, loss=None):
+    """Print timing information and loss on one line, updating in place"""
     timing_str = " | ".join([f"{k}: {v:.1f}ms" for k, v in timing_dict.items()])
-    print(f"{timing_str}", end='\r')  # Use carriage return to update in place
+    loss_str = f" | loss: {loss:.4f}" if loss is not None else ""
+    print(f"\r{timing_str}{loss_str}".ljust(100), end='', flush=True)
 
 def main():
     # Initialize components with smaller dimensions
@@ -47,9 +48,7 @@ def main():
             
             # Time tensor conversion
             t0 = time.time()
-            screen_tensor = torch.FloatTensor(screen_state)
-            if screen_tensor.dim() == 3:
-                screen_tensor = screen_tensor.unsqueeze(0)
+            screen_tensor = torch.from_numpy(screen_state)
             timings['tensor_conv'] = (time.time() - t0) * 1000
             
             # Time model training
@@ -60,14 +59,14 @@ def main():
             # Time prediction
             t0 = time.time()
             with torch.no_grad():
-                prediction = model(screen_tensor)
+                prediction = model(screen_tensor.unsqueeze(0))
             timings['prediction'] = (time.time() - t0) * 1000
             
             # Total loop time
             timings['total'] = (time.time() - loop_start) * 1000
             
-            # Print timings
-            print_timing(timings)
+            # Print timings and loss
+            print_timing(timings, loss)
             
             time.sleep(0.01)
             

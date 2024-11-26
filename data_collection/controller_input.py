@@ -16,6 +16,7 @@ class ControllerInput:
             'BTN_TL': 0,     # Left bumper
             'BTN_TR': 0      # Right bumper
         }
+        self._state_list = [0] * 12  # Pre-allocated list for faster access
     
     def get_state(self):
         """Returns the current state of all controller inputs"""
@@ -27,7 +28,11 @@ class ControllerInput:
         except Exception as e:
             print(f"Controller read error: {e}")
         
-        return self.button_states
+        # Update pre-allocated list
+        for i, value in enumerate(self.button_states.values()):
+            self._state_list[i] = value
+            
+        return self._state_list  # Return list instead of dict for faster processing
 
     def __del__(self):
         """Cleanup when the object is destroyed"""
