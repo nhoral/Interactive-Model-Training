@@ -5,25 +5,78 @@ from model.network import GameInputNetwork
 from model.trainer import ModelTrainer
 import keyboard
 import time
+import argparse
+import os
+import tkinter as tk
+from tkinter import ttk
 
-def print_timing(timing_dict, loss=None):
-    """Print timing information and loss on one line, updating in place"""
-    timing_str = " | ".join([f"{k}: {v:.1f}ms" for k, v in timing_dict.items()])
-    loss_str = f" | loss: {loss:.4f}" if loss is not None else ""
-    print(f"\r{timing_str}{loss_str}".ljust(100), end='', flush=True)
+class TrainingWindow:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Training Monitor")
+        self.root.attributes('-topmost', True)  # Stay on top
+        self.root.geometry('400x100')  # Set window size
+        
+        # Style
+        style = ttk.Style()
+        style.configure('TLabel', font=('Courier', 10))
+        
+        # Create labels
+        self.timing_label = ttk.Label(self.root, style='TLabel')
+        self.timing_label.pack(pady=10)
+        
+        self.loss_label = ttk.Label(self.root, style='TLabel')
+        self.loss_label.pack(pady=10)
+        
+        # Initialize animation state
+        self.tick = False
+    
+    def update_display(self, timings, loss):
+        """Update the display with new timing and loss information"""
+        self.tick = not self.tick
+        indicator = "|" if self.tick else "-"
+        
+        # Format timing string
+        important_timings = {k: timings[k] for k in ['screen', 'training', 'prediction', 'total'] 
+                           if k in timings}
+        timing_str = " | ".join([f"{k}: {v:.1f}ms" for k, v in important_timings.items()])
+        
+        # Format loss string
+        loss_str = f"Loss: {loss:.4f}" if loss is not None else ""
+        
+        # Update labels
+        self.timing_label.config(text=f"{indicator} {timing_str}")
+        self.loss_label.config(text=loss_str)
+        
+        # Process any pending events
+        self.root.update()
 
 def main():
-    # Initialize components with smaller dimensions
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Train a model to predict controller inputs from screen capture.')
+    parser.add_argument('--reset', action='store_true', help='Start with a fresh model, ignoring any saved weights')
+    args = parser.parse_args()
+
+    # Initialize components
     WIDTH = 320
     HEIGHT = 240
     
     controller = ControllerInput()
     screen_capture = ScreenCapture(width=WIDTH, height=HEIGHT)
-    
-    # Initialize model with same dimensions
     model = GameInputNetwork(input_channels=3, input_height=HEIGHT, input_width=WIDTH)
+    
+    # Load existing model unless reset is specified
+    model_path = 'game_input_model.pth'
+    if not args.reset and os.path.exists(model_path):
+        print(f"Loading existing model from {model_path}")
+        model.load_state_dict(torch.load(model_path))
+    else:
+        print("Starting with fresh model")
+    
     trainer = ModelTrainer(model)
     
+    # Create monitoring window
+    window = TrainingWindow()
     print("Starting input prediction system...")
     print("Press 'Q' to stop training")
     
@@ -41,15 +94,11 @@ def main():
             screen_state = screen_capture.get_frame()
             timings['screen'] = (time.time() - t0) * 1000
             
-            # Time controller input
-            t0 = time.time()
+            # Get controller input (not timed)
             controller_state = controller.get_state()
-            timings['controller'] = (time.time() - t0) * 1000
             
-            # Time tensor conversion
-            t0 = time.time()
+            # Convert to tensor (not timed)
             screen_tensor = torch.from_numpy(screen_state)
-            timings['tensor_conv'] = (time.time() - t0) * 1000
             
             # Time model training
             t0 = time.time()
@@ -65,8 +114,8 @@ def main():
             # Total loop time
             timings['total'] = (time.time() - loop_start) * 1000
             
-            # Print timings and loss
-            print_timing(timings, loss)
+            # Update display
+            window.update_display(timings, loss)
             
             time.sleep(0.01)
             
@@ -75,8 +124,9 @@ def main():
     
     finally:
         print("\nSaving model...")
-        torch.save(model.state_dict(), 'game_input_model.pth')
+        torch.save(model.state_dict(), model_path)
         print("Training stopped")
+        window.root.destroy()
 
 if __name__ == "__main__":
     main()

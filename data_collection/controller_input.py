@@ -1,4 +1,6 @@
 from inputs import get_gamepad
+import threading
+import time
 
 class ControllerInput:
     def __init__(self):
@@ -16,24 +18,35 @@ class ControllerInput:
             'BTN_TL': 0,     # Left bumper
             'BTN_TR': 0      # Right bumper
         }
-        self._state_list = [0] * 12  # Pre-allocated list for faster access
+        self._state_list = [0] * 12  # Pre-allocated list
+        
+        # Start background thread to continuously update controller state
+        self._running = True
+        self._thread = threading.Thread(target=self._update_state)
+        self._thread.daemon = True
+        self._thread.start()
+    
+    def _update_state(self):
+        """Background thread to continuously read controller state"""
+        while self._running:
+            try:
+                events = get_gamepad()
+                for event in events:
+                    if event.code in self.button_states:
+                        self.button_states[event.code] = event.state
+            except Exception as e:
+                pass  # Ignore errors in background thread
+            time.sleep(0.001)  # Small sleep to prevent CPU thrashing
     
     def get_state(self):
         """Returns the current state of all controller inputs"""
-        try:
-            events = get_gamepad()
-            for event in events:
-                if event.code in self.button_states:
-                    self.button_states[event.code] = event.state
-        except Exception as e:
-            print(f"Controller read error: {e}")
-        
-        # Update pre-allocated list
+        # Update pre-allocated list with current state
         for i, value in enumerate(self.button_states.values()):
             self._state_list[i] = value
-            
-        return self._state_list  # Return list instead of dict for faster processing
-
+        return self._state_list
+    
     def __del__(self):
         """Cleanup when the object is destroyed"""
-        pass
+        self._running = False
+        if hasattr(self, '_thread'):
+            self._thread.join(timeout=1.0)
