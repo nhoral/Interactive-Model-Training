@@ -6,9 +6,21 @@ import win32api
 import cv2
 
 class ScreenCapture:
-    def __init__(self, width=320, height=240):
+    def __init__(self, width=854, height=480):
         self.width = width
         self.height = height
+        
+        # Get the screen size
+        screen_width = win32api.GetSystemMetrics(0)
+        screen_height = win32api.GetSystemMetrics(1)
+        
+        # Calculate the centered region
+        self.left = (screen_width - width) // 2
+        self.top = (screen_height - height) // 2
+        self.right = self.left + width
+        self.bottom = self.top + height
+        
+        print(f"\nCapturing {width}x{height} region at ({self.left}, {self.top})")
         
         # Get handle to the primary monitor
         self.hwnd = win32gui.GetDesktopWindow()

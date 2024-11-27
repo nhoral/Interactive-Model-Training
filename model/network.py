@@ -1,33 +1,70 @@
-import torch
+import torchvision.models as models
 import torch.nn as nn
+import torch
 
 class GameInputNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=240, input_width=320):
+    def __init__(self, input_channels=3, input_height=480, input_width=854):
         super(GameInputNetwork, self).__init__()
         
-        # Store input dimensions
-        self.input_channels = input_channels
-        self.input_height = input_height
-        self.input_width = input_width
+        # Load pre-trained MobileNetV3-Small
+        self.features = models.mobilenet_v3_small(weights='DEFAULT').features
         
-        # More efficient CNN architecture
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(input_channels, 4, kernel_size=16, stride=16, padding=0),  # Aggressive downsampling
-            nn.ReLU(inplace=True),  # inplace operations
-            nn.Conv2d(4, 8, kernel_size=4, stride=4, padding=0),
+        # Freeze only the first few layers
+        for param in list(self.features.parameters())[:4]:  # Keep most layers trainable
+            param.requires_grad = False
+            
+        # Lightweight heads for our specific task
+        self.shared_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Dropout(0.2),  # Add dropout for regularization
+            nn.Linear(576, 128),  # MobileNetV3-Small outputs 576 features
             nn.ReLU(inplace=True),
-            nn.Flatten()
+            nn.Dropout(0.2)
         )
         
-        self._feature_size = self._get_conv_output_size()
+        # Separate paths for buttons and analog
+        self.button_path = nn.Sequential(
+            nn.Linear(128, 4),
+            nn.Sigmoid()
+        )
         
-        # Single linear layer for faster inference
-        self.output_layer = nn.Linear(self._feature_size, 12)
+        self.analog_path = nn.Sequential(
+            nn.Linear(128, 8),
+            # Custom activation to ensure analog starts at 0.5
+            nn.Sigmoid()
+        )
+        
+        # Initialize weights properly
+        self._initialize_weights()
+        
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    if m in self.analog_path:
+                        # Initialize analog outputs to center position
+                        nn.init.constant_(m.bias, 0.5)
+                    else:
+                        nn.init.constant_(m.bias, 0)
         
     def forward(self, x):
-        return self.output_layer(self.conv_layers(x))
+        # Ensure input is float and normalized
+        x = x.float()
+        if x.max() > 1.0:
+            x = x / 255.0
+            
+        # Extract features
+        features = self.features(x)
+        shared = self.shared_head(features)
         
-    def _get_conv_output_size(self):
-        x = torch.zeros(1, self.input_channels, self.input_height, self.input_width)
-        x = self.conv_layers(x)
-        return x.shape[1]
+        # Get predictions
+        button_out = self.button_path(shared)
+        analog_out = self.analog_path(shared)
+        
+        return torch.cat((button_out, analog_out), dim=1)
+
+    def get_trainable_params(self):
+        """Return number of trainable parameters"""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)

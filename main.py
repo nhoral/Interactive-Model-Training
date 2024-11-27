@@ -52,24 +52,29 @@ class TrainingWindow:
         self.root.update()
 
 def main():
+    # Set device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"\nUsing: {device.type.upper()}")
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train a model to predict controller inputs from screen capture.')
     parser.add_argument('--reset', action='store_true', help='Start with a fresh model, ignoring any saved weights')
     args = parser.parse_args()
 
     # Initialize components
-    WIDTH = 320
-    HEIGHT = 240
+    WIDTH = 854  # 480p width
+    HEIGHT = 480 # 480p height
     
     controller = ControllerInput()
     screen_capture = ScreenCapture(width=WIDTH, height=HEIGHT)
     model = GameInputNetwork(input_channels=3, input_height=HEIGHT, input_width=WIDTH)
+    model = model.to(device)
     
     # Load existing model unless reset is specified
     model_path = 'game_input_model.pth'
     if not args.reset and os.path.exists(model_path):
-        print(f"Loading existing model from {model_path}")
-        model.load_state_dict(torch.load(model_path))
+        print("Loading existing model from", model_path)
+        model.load_state_dict(torch.load(model_path, map_location=device))
     else:
         print("Starting with fresh model")
     
@@ -97,8 +102,8 @@ def main():
             # Get controller input (not timed)
             controller_state = controller.get_state()
             
-            # Convert to tensor (not timed)
-            screen_tensor = torch.from_numpy(screen_state)
+            # Convert to tensor and move to device
+            screen_tensor = torch.from_numpy(screen_state).float().to(device)
             
             # Time model training
             t0 = time.time()
