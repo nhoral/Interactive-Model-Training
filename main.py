@@ -105,6 +105,25 @@ def simulate_inputs(prediction, virtual_controller):
     virtual_controller.left_joystick(x_value=left_x, y_value=left_y)
     virtual_controller.right_joystick(x_value=right_x, y_value=right_y)
 
+def send_neutral_input(virtual_controller):
+    """Send neutral input to the virtual controller"""
+    # Release all buttons
+    virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
+    virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_B)
+    virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_X)
+    virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_Y)
+    
+    # Set sticks to neutral position
+    virtual_controller.left_joystick(x_value=0, y_value=0)
+    virtual_controller.right_joystick(x_value=0, y_value=0)
+    
+    # Set triggers to neutral position
+    virtual_controller.left_trigger(value=0)
+    virtual_controller.right_trigger(value=0)
+    
+    # Update the virtual controller
+    virtual_controller.update()
+
 def main():
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -155,10 +174,17 @@ def main():
                 break
             
             if keyboard.is_pressed('t'):
+                if mode == 'prediction':
+                    # Send neutral input before switching to training mode
+                    if virtual_controller is not None:
+                        send_neutral_input(virtual_controller)
+                
                 mode = 'prediction' if mode == 'training' else 'training'
                 print(f"\nSwitched to {mode} mode")
+                
                 if mode == 'prediction' and virtual_controller is None:
                     virtual_controller = vg.VX360Gamepad()
+                
                 time.sleep(0.5)
             timings['keyboard'] = (time.time() - t0) * 1000
             
