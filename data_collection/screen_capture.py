@@ -10,18 +10,6 @@ class ScreenCapture:
         self.width = width
         self.height = height
         
-        # Get the screen size
-        screen_width = win32api.GetSystemMetrics(0)
-        screen_height = win32api.GetSystemMetrics(1)
-        
-        # Calculate the centered region
-        self.left = (screen_width - width) // 2
-        self.top = (screen_height - height) // 2
-        self.right = self.left + width
-        self.bottom = self.top + height
-        
-        print(f"\nCapturing {width}x{height} region at ({self.left}, {self.top})")
-        
         # Get handle to the primary monitor
         self.hwnd = win32gui.GetDesktopWindow()
         
@@ -48,7 +36,7 @@ class ScreenCapture:
             (0, 0), 
             (self.screen_width, self.screen_height), 
             self.mfc_dc, 
-            (0, 0),  # Start from top-left corner
+            (0, 0),
             win32con.SRCCOPY
         )
         
@@ -64,9 +52,24 @@ class ScreenCapture:
             out=self.frame_buffer
         )
         
-        # Transpose for PyTorch (CHW format)
-        np.copyto(self.output_buffer, self.frame_buffer.transpose(2, 0, 1))
+        # Basic augmentation
+        img = self.frame_buffer
         
+        # Random brightness adjustment (0.8 to 1.2)
+        if np.random.random() < 0.3:
+            brightness = np.random.uniform(0.8, 1.2)
+            img = np.clip(img * brightness, 0, 1)
+            
+        # Random contrast adjustment
+        if np.random.random() < 0.3:
+            contrast = np.random.uniform(0.8, 1.2)
+            img = np.clip((img - 0.5) * contrast + 0.5, 0, 1)
+            
+        # Normalize
+        img = (img - img.mean()) / (img.std() + 1e-5)
+        
+        # Update output buffer
+        np.copyto(self.output_buffer, img.transpose(2, 0, 1))
         return self.output_buffer
         
     def __del__(self):

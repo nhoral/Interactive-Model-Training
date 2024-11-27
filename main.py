@@ -14,8 +14,8 @@ class TrainingWindow:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Training Monitor")
-        self.root.attributes('-topmost', True)  # Stay on top
-        self.root.geometry('400x100')  # Set window size
+        self.root.attributes('-topmost', True)
+        self.root.geometry('500x150')
         
         # Style
         style = ttk.Style()
@@ -23,32 +23,33 @@ class TrainingWindow:
         
         # Create labels
         self.timing_label = ttk.Label(self.root, style='TLabel')
-        self.timing_label.pack(pady=10)
+        self.timing_label.pack(pady=5)
         
         self.loss_label = ttk.Label(self.root, style='TLabel')
-        self.loss_label.pack(pady=10)
+        self.loss_label.pack(pady=5)
         
-        # Initialize animation state
-        self.tick = False
-    
-    def update_display(self, timings, loss):
-        """Update the display with new timing and loss information"""
-        self.tick = not self.tick
-        indicator = "|" if self.tick else "-"
+        self.input_label = ttk.Label(self.root, style='TLabel')
+        self.input_label.pack(pady=5)
         
+    def update_display(self, timings, metrics, controller_state):
+        """Update the display with timing, metrics, and controller state"""
         # Format timing string
-        important_timings = {k: timings[k] for k in ['screen', 'training', 'prediction', 'total'] 
-                           if k in timings}
-        timing_str = " | ".join([f"{k}: {v:.1f}ms" for k, v in important_timings.items()])
+        timing_str = f"Total Time: {timings['total']:.1f}ms"
         
         # Format loss string
-        loss_str = f"Loss: {loss:.4f}" if loss is not None else ""
+        loss_str = f"Loss: {metrics['loss']:.4f}" if metrics else "Loss: N/A"
+        
+        # Format controller input string
+        buttons = "".join(["[X]" if state > 0.5 else "[ ]" for state in controller_state[:4]])
+        analogs = ", ".join([f"{state:.2f}" for state in controller_state[4:8]])
+        input_str = f"Buttons: {buttons} / Sticks: {analogs}"
         
         # Update labels
-        self.timing_label.config(text=f"{indicator} {timing_str}")
+        self.timing_label.config(text=timing_str)
         self.loss_label.config(text=loss_str)
+        self.input_label.config(text=input_str)
         
-        # Process any pending events
+        # Process pending events
         self.root.update()
 
 def main():
@@ -99,7 +100,7 @@ def main():
             screen_state = screen_capture.get_frame()
             timings['screen'] = (time.time() - t0) * 1000
             
-            # Get controller input (not timed)
+            # Get controller input
             controller_state = controller.get_state()
             
             # Convert to tensor and move to device
@@ -107,7 +108,7 @@ def main():
             
             # Time model training
             t0 = time.time()
-            loss = trainer.train_step(screen_tensor, controller_state)
+            metrics = trainer.train_step(screen_tensor, controller_state)
             timings['training'] = (time.time() - t0) * 1000
             
             # Time prediction
@@ -119,8 +120,8 @@ def main():
             # Total loop time
             timings['total'] = (time.time() - loop_start) * 1000
             
-            # Update display
-            window.update_display(timings, loss)
+            # Update display with metrics
+            window.update_display(timings, metrics, controller_state)
             
             time.sleep(0.01)
             

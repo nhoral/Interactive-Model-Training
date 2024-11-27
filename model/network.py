@@ -59,10 +59,20 @@ class GameInputNetwork(nn.Module):
         features = self.features(x)
         shared = self.shared_head(features)
         
+        # Add small random noise during training
+        if self.training:
+            shared = shared + torch.randn_like(shared) * 0.01
+        
         # Get predictions
         button_out = self.button_path(shared)
         analog_out = self.analog_path(shared)
         
+        # Ensure analog outputs aren't stuck in the middle
+        if self.training:
+            # Add small bias away from 0.5
+            analog_bias = (analog_out - 0.5).sign() * 0.01
+            analog_out = analog_out + analog_bias
+            
         return torch.cat((button_out, analog_out), dim=1)
 
     def get_trainable_params(self):
