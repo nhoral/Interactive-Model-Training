@@ -1,42 +1,58 @@
-import torchvision.models as models
 import torch.nn as nn
 import torch
+from torchvision.models.video import r3d_18
 
 class GameInputNetwork(nn.Module):
-    def __init__(self, input_channels=3, input_height=480, input_width=854):
+    def __init__(self, input_channels=3, input_height=256, input_width=256, num_frames=4):
         super(GameInputNetwork, self).__init__()
         
-        # Load pre-trained MobileNetV3-Small
-        self.features = models.mobilenet_v3_small(weights='DEFAULT').features
+        # Get device
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Freeze only the first few layers
-        for param in list(self.features.parameters())[:4]:  # Keep most layers trainable
+        # Load pre-trained R3D-18
+        self.features = r3d_18(weights='DEFAULT')
+        
+        # Remove the last classification layer
+        self.features = nn.Sequential(*list(self.features.children())[:-1])
+        
+        # Freeze early layers
+        for param in list(self.features.parameters())[:20]:  # Adjust freezing as needed
             param.requires_grad = False
             
         # Lightweight heads for our specific task
         self.shared_head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
+            nn.AdaptiveAvgPool3d(1),
             nn.Flatten(),
-            nn.Dropout(0.2),  # Add dropout for regularization
-            nn.Linear(576, 128),  # MobileNetV3-Small outputs 576 features
+            nn.Dropout(0.2),
+            nn.Linear(512, 128),  # R3D-18 outputs 512 features
             nn.ReLU(inplace=True),
             nn.Dropout(0.2)
         )
         
         # Separate paths for buttons and analog
         self.button_path = nn.Sequential(
-            nn.Linear(128, 4),
+            nn.Linear(128, 6),  # Updated to 6 for A,B,X,Y,L3,R3
             nn.Sigmoid()
         )
         
         self.analog_path = nn.Sequential(
-            nn.Linear(128, 8),
-            # Custom activation to ensure analog starts at 0.5
+            nn.Linear(128, 8),  # Remains 8 for analog sticks and triggers
             nn.Sigmoid()
         )
         
-        # Initialize weights properly
+        # Initialize frame buffer on the correct device
+        self.frame_buffer = torch.zeros((num_frames, input_channels, input_height, input_width),
+                                      device=self.device)
+        self.num_frames = num_frames
+        
         self._initialize_weights()
+        
+        # Use half precision for faster computation
+        self.half_precision = False
+        
+        # Optimize for inference
+        if not self.training:
+            self.features = torch.jit.script(self.features)
         
     def _initialize_weights(self):
         for m in self.modules():
@@ -44,12 +60,31 @@ class GameInputNetwork(nn.Module):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
                     if m in self.analog_path:
-                        # Initialize analog outputs to center position
                         nn.init.constant_(m.bias, 0.5)
                     else:
                         nn.init.constant_(m.bias, 0)
+    
+    def update_frame_buffer(self, new_frame):
+        # Ensure new frame is on the correct device
+        if new_frame.device != self.device:
+            new_frame = new_frame.to(self.device)
+            
+        # Roll the buffer and add new frame
+        self.frame_buffer = torch.roll(self.frame_buffer, -1, dims=0)
+        self.frame_buffer[-1] = new_frame
         
     def forward(self, x):
+        # Ensure input is on the correct device
+        if x.device != self.device:
+            x = x.to(self.device)
+            
+        # Update frame buffer
+        self.update_frame_buffer(x[0])
+        
+        # Prepare input for R3D (B, C, T, H, W)
+        x = self.frame_buffer.unsqueeze(0)  # Add batch dimension
+        x = x.permute(0, 2, 1, 3, 4)  # Reorder to (B, C, T, H, W)
+        
         # Ensure input is float and normalized
         x = x.float()
         if x.max() > 1.0:
@@ -69,7 +104,6 @@ class GameInputNetwork(nn.Module):
         
         # Ensure analog outputs aren't stuck in the middle
         if self.training:
-            # Add small bias away from 0.5
             analog_bias = (analog_out - 0.5).sign() * 0.01
             analog_out = analog_out + analog_bias
             

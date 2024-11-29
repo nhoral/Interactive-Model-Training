@@ -2,7 +2,7 @@ import torch
 from data_collection.controller_input import ControllerInput
 from data_collection.screen_capture import ScreenCapture
 from model.network import GameInputNetwork
-from model.trainer import ModelTrainer
+from model.trainer import ComplexityAwareTrainer
 import keyboard
 import time
 import argparse
@@ -17,7 +17,7 @@ class TrainingWindow:
         self.root = tk.Tk()
         self.root.title("Training Monitor")
         self.root.attributes('-topmost', True)
-        self.root.geometry('1300x145')  # Slightly wider to accommodate all inputs
+        self.root.geometry('1430x145')  # Slightly wider to accommodate all inputs
         
         # Style
         style = ttk.Style()
@@ -37,7 +37,13 @@ class TrainingWindow:
         self.controller_label = ttk.Label(controller_frame, style='TLabel')
         self.controller_label.pack(anchor='w')
         
+        self.update_counter = 0
+        self.update_frequency = 2  # Update display every N frames
+        
     def update_display(self, timings, metrics, controller_state, mode='training', prediction=None):
+        self.update_counter += 1
+        if self.update_counter % self.update_frequency != 0:
+            return
         """Update the display with timing, metrics, and controller state"""
         # Calculate total time from components
         total_time = sum(timings.values())
@@ -53,22 +59,27 @@ class TrainingWindow:
         
         # Format controller state line
         face_buttons = "".join([
-            f"{'A' if state_to_display[0] > 0.5 else '_'}",
-            f"{'B' if state_to_display[1] > 0.5 else '_'}",
-            f"{'X' if state_to_display[2] > 0.5 else '_'}",
-            f"{'Y' if state_to_display[3] > 0.5 else '_'}"
+            f"{'A' if state_to_display[0] > 0.5 else '_'}",  # A (BTN_SOUTH)
+            f"{'B' if state_to_display[1] > 0.5 else '_'}",  # B (BTN_EAST)
+            f"{'Y' if state_to_display[3] > 0.5 else '_'}",  # Y (BTN_NORTH) - swapped with X
+            f"{'X' if state_to_display[2] > 0.5 else '_'}"   # X (BTN_WEST) - swapped with Y
         ])
         
         shoulder_buttons = "".join([
             f"{'LB' if state_to_display[10] > 0.5 else '__'}",
             f"{'RB' if state_to_display[11] > 0.5 else '__'}"
         ])
-        triggers = f"LT:{state_to_display[8]:.1f} RT:{state_to_display[9]:.1f}"
         
+        stick_buttons = "".join([
+            f"{'L3' if state_to_display[12] > 0.5 else '__'}",
+            f"{'R3' if state_to_display[13] > 0.5 else '__'}"
+        ])
+        
+        triggers = f"LT:{state_to_display[8]:.1f} RT:{state_to_display[9]:.1f}"
         left_stick = f"L({state_to_display[4]:.2f},{state_to_display[5]:.2f})"
         right_stick = f"R({state_to_display[6]:.2f},{state_to_display[7]:.2f})"
         
-        controller_str = f"[{face_buttons}] [{shoulder_buttons}] {triggers} | {left_stick} | {right_stick}"
+        controller_str = f"[{face_buttons}] [{shoulder_buttons}] [{stick_buttons}] {triggers} | {left_stick} | {right_stick}"
         
         # Update labels
         self.metrics_label.config(text=metrics_str)
@@ -104,6 +115,28 @@ def simulate_inputs(prediction, virtual_controller):
     
     virtual_controller.left_joystick(x_value=left_x, y_value=left_y)
     virtual_controller.right_joystick(x_value=right_x, y_value=right_y)
+    
+    # Triggers (values 8-9)
+    # Convert from 0-1 range to 0-255 range
+    left_trigger = int(pred[8] * 255)
+    right_trigger = int(pred[9] * 255)
+    
+    virtual_controller.left_trigger(value=left_trigger)
+    virtual_controller.right_trigger(value=right_trigger)
+    
+    # Shoulder buttons (values 10-11)
+    if pred[10] > 0.5: virtual_controller.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER)
+    else: virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER)
+    
+    if pred[11] > 0.5: virtual_controller.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
+    else: virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER)
+    
+    # L3/R3 buttons (values 12-13)
+    if pred[12] > 0.5: virtual_controller.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
+    else: virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
+    
+    if pred[13] > 0.5: virtual_controller.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB)
+    else: virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB)
 
 def send_neutral_input(virtual_controller):
     """Send neutral input to the virtual controller"""
@@ -121,6 +154,10 @@ def send_neutral_input(virtual_controller):
     virtual_controller.left_trigger(value=0)
     virtual_controller.right_trigger(value=0)
     
+    # Release L3/R3
+    virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
+    virtual_controller.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB)
+    
     # Update the virtual controller
     virtual_controller.update()
 
@@ -136,12 +173,18 @@ def main():
     args = parser.parse_args()
 
     # Initialize components
-    WIDTH = 854  # 480p width
-    HEIGHT = 480 # 480p height
+    WIDTH = 256  # Reduced resolution for R3D processing
+    HEIGHT = 256 # Square resolution works better with R3D
+    NUM_FRAMES = 4  # Number of frames to maintain in buffer
     
     controller = ControllerInput()
     screen_capture = ScreenCapture(width=WIDTH, height=HEIGHT)
-    model = GameInputNetwork(input_channels=3, input_height=HEIGHT, input_width=WIDTH)
+    model = GameInputNetwork(
+        input_channels=3, 
+        input_height=HEIGHT, 
+        input_width=WIDTH,
+        num_frames=NUM_FRAMES
+    )
     model = model.to(device)
     
     # Load existing model unless reset is specified
@@ -152,7 +195,7 @@ def main():
     else:
         print("Starting with fresh model")
     
-    trainer = ModelTrainer(model)
+    trainer = ComplexityAwareTrainer(model)
     
     # Create monitoring window
     window = TrainingWindow()
@@ -164,8 +207,8 @@ def main():
     
     try:
         while True:
-            timings = {}
             loop_start = time.time()
+            timings = {}
             
             # Keyboard check timing
             t0 = time.time()
@@ -190,53 +233,43 @@ def main():
             
             # Screen capture timing
             t0 = time.time()
-            screen_state = screen_capture.get_frame()
+            screen_tensor = screen_capture.get_frame()  # Already a tensor on GPU
             timings['screen'] = (time.time() - t0) * 1000
             
-            # Controller input timing
+            # Controller timing
             t0 = time.time()
             controller_state = controller.get_state()
             timings['controller'] = (time.time() - t0) * 1000
-            
-            # Tensor conversion timing
-            t0 = time.time()
-            screen_tensor = torch.from_numpy(screen_state).float().to(device)
-            timings['tensor_conv'] = (time.time() - t0) * 1000
             
             # Training/prediction timing
             t0 = time.time()
             if mode == 'training':
                 metrics = trainer.train_step(screen_tensor, controller_state)
-                if metrics is not None:
-                    timings['training'] = (time.time() - t0) * 1000
+                timings['training'] = (time.time() - t0) * 1000
             else:
                 with torch.no_grad():
-                    prediction = model(screen_tensor.unsqueeze(0))
-                if virtual_controller is not None:
+                    prediction = model(screen_tensor)  # Removed unsqueeze(0) since screen_tensor is already batched
+                    # Simulate the predicted inputs
                     simulate_inputs(prediction, virtual_controller)
-                    virtual_controller.update()
+                    virtual_controller.update()  # Important: update the virtual controller
                 timings['prediction'] = (time.time() - t0) * 1000
             
             # Display update timing
             t0 = time.time()
-            if mode == 'prediction':
-                window.update_display(timings, None, controller_state, mode='prediction', prediction=prediction)
+            if mode == 'training':
+                window.update_display(timings, metrics, controller_state, mode=mode)
             else:
-                window.update_display(timings, metrics, controller_state, mode='training')
+                # Pass the prediction tensor instead of controller_state when in prediction mode
+                window.update_display(timings, None, controller_state, mode='prediction', prediction=prediction.cpu().numpy())
             timings['display'] = (time.time() - t0) * 1000
             
-            # Total loop time
-            timings['total'] = (time.time() - loop_start) * 1000
+            # Print timing breakdown
+            print("\rTimings (ms) - ", end="")
+            for key, value in timings.items():
+                print(f"{key}: {value:.1f} | ", end="")
             
-            # Print timing breakdown if debugging is enabled
-            if args.debug:
-                print("\rTimings (ms) - ", end="")
-                for key, value in timings.items():
-                    if key != 'total':
-                        print(f"{key}: {value:.1f} | ", end="")
-                print(f"total: {timings['total']:.1f}", end="")
-            
-            time.sleep(0.01)
+            # Adjust sleep time to maintain consistent frame rate
+            time.sleep(max(0.016 - (time.time() - loop_start), 0))  # Target ~60 FPS
             
     finally:
         print("\nSaving model...")

@@ -16,9 +16,11 @@ class ControllerInput:
             'ABS_Z': 0,      # Left trigger
             'ABS_RZ': 0,     # Right trigger
             'BTN_TL': 0,     # Left bumper
-            'BTN_TR': 0      # Right bumper
+            'BTN_TR': 0,     # Right bumper
+            'BTN_THUMBL': 0, # Left stick click (L3)
+            'BTN_THUMBR': 0  # Right stick click (R3)
         }
-        self._state_list = [0] * 12
+        self._state_list = [0] * 14
         
         # Start background thread to continuously update controller state
         self._running = True
@@ -42,7 +44,26 @@ class ControllerInput:
         """Returns normalized controller inputs"""
         normalized_state = []
         
-        for key, value in self.button_states.items():
+        # Order matters! This defines the indices in the state list
+        button_order = [
+            'BTN_SOUTH',    # A - index 0
+            'BTN_EAST',     # B - index 1
+            'BTN_WEST',     # X - index 2
+            'BTN_NORTH',    # Y - index 3
+            'ABS_X',        # Left stick X - index 4
+            'ABS_Y',        # Left stick Y - index 5
+            'ABS_RX',       # Right stick X - index 6
+            'ABS_RY',       # Right stick Y - index 7
+            'ABS_Z',        # Left trigger - index 8
+            'ABS_RZ',       # Right trigger - index 9
+            'BTN_TL',       # Left bumper - index 10
+            'BTN_TR',       # Right bumper - index 11
+            'BTN_THUMBL',   # L3 - index 12
+            'BTN_THUMBR'    # R3 - index 13
+        ]
+        
+        for key in button_order:
+            value = self.button_states[key]
             if key.startswith('BTN_'):
                 # Buttons are already 0 or 1
                 normalized_state.append(float(value))

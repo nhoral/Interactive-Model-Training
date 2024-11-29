@@ -1,59 +1,85 @@
+"""
+Screen Capture using DXCam-CPP for efficient DirectX-based capture
+"""
+
 import numpy as np
-import win32gui
-import win32ui
-import win32con
-import win32api
+import torch
 import cv2
+import time
+import dxcam_cpp as dxcam
 
 class ScreenCapture:
-    def __init__(self, width=854, height=480):
+    def __init__(self, width=256, height=256):
         self.width = width
         self.height = height
         
-        # Get handle to the primary monitor
-        self.hwnd = win32gui.GetDesktopWindow()
+        print("\nInitializing DXCamera...")
         
-        # Create device context and bitmap for target resolution
-        self.hwnd_dc = win32gui.GetWindowDC(self.hwnd)
-        self.mfc_dc = win32ui.CreateDCFromHandle(self.hwnd_dc)
-        self.save_dc = self.mfc_dc.CreateCompatibleDC()
-        
-        # Create bitmap at target resolution instead of full screen
-        self.bitmap = win32ui.CreateBitmap()
-        self.bitmap.CreateCompatibleBitmap(self.mfc_dc, width, height)
-        self.save_dc.SelectObject(self.bitmap)
-        
-        # Pre-allocate numpy array (channels first for PyTorch)
-        self.output_buffer = np.zeros((3, height, width), dtype=np.float32)
-        
-        # Get screen dimensions for scaling
-        self.screen_width = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
-        self.screen_height = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
-        
+        try:
+            # Create camera with video mode enabled and capture region matching target size
+            self.camera = dxcam.create(
+                max_buffer_len=2,  # Minimize buffer size
+                region=(0, 0, width, height)  # Capture at target size directly
+            )
+            print("Camera created")
+            
+            # Start capture in video mode for consistent frame rate
+            print("Starting capture in video mode...")
+            self.camera.start(target_fps=60, video_mode=True)
+            
+            # Test capture and setup
+            test_frame = self.camera.get_latest_frame()
+            if test_frame is None:
+                raise RuntimeError("Failed to get test frame")
+            
+            # Setup GPU
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            
+            # Pre-allocate GPU tensors
+            self.frame_tensor = torch.zeros(
+                (1, 4, height, width),  # BGRA format
+                dtype=torch.uint8,
+                device=self.device
+            )
+            self.screen_tensor = torch.zeros(
+                (1, 3, height, width),
+                dtype=torch.float32,
+                device=self.device
+            )
+            
+            # Create dedicated CUDA stream
+            self.stream = torch.cuda.Stream() if self.device.type == 'cuda' else None
+            
+            print(f"Initialization complete")
+            
+        except Exception as e:
+            print(f"ERROR during initialization: {str(e)}")
+            if hasattr(self, 'camera'):
+                self.camera.stop()
+            raise
+    
     def get_frame(self):
-        # Capture and resize in one step using StretchBlt
-        self.save_dc.StretchBlt(
-            (0, 0),
-            (self.width, self.height),
-            self.mfc_dc,
-            (0, 0),
-            (self.screen_width, self.screen_height),
-            win32con.SRCCOPY
-        )
-        
-        # Convert bitmap to numpy array
-        bmp_bits = self.bitmap.GetBitmapBits(True)
-        img = np.frombuffer(bmp_bits, dtype=np.uint8)
-        img = img.reshape((self.height, self.width, 4))[:, :, :3]  # Remove alpha channel
-        
-        # Normalize and transpose in one step
-        np.divide(img, 255.0, out=self.output_buffer.reshape(self.height, self.width, 3))
-        self.output_buffer = self.output_buffer.reshape(3, self.height, self.width)
-        
-        return self.output_buffer
-        
+        with torch.cuda.stream(self.stream) if self.stream else torch.no_grad():
+            # Get latest frame (should never be None in video mode)
+            frame = self.camera.get_latest_frame()
+            
+            if frame is not None:
+                # Copy frame directly to GPU
+                self.frame_tensor.copy_(
+                    torch.from_numpy(frame).to(
+                        self.device, 
+                        non_blocking=True
+                    ).permute(2, 0, 1).unsqueeze(0)
+                )
+                
+                # Convert BGRA to RGB and normalize on GPU
+                self.screen_tensor.copy_(
+                    self.frame_tensor[:, [2, 1, 0]].float() / 255.0  # BGR -> RGB and normalize
+                )
+            
+            return self.screen_tensor
+    
     def __del__(self):
-        self.save_dc.DeleteDC()
-        self.mfc_dc.DeleteDC()
-        win32gui.ReleaseDC(self.hwnd, self.hwnd_dc)
-        win32gui.DeleteObject(self.bitmap.GetHandle())
+        if hasattr(self, 'camera'):
+            print("\nStopping DXCamera...")
+            self.camera.stop()
